@@ -1,0 +1,130 @@
+#!/bin/sh
+# 
+#  Copyright (C) 1997, Doug Simon
+# 
+#  See the file "LICENSE.TERMS" for information on usage and
+#  redistribution of this file, and for a DISCLAIMER OF ALL
+#  WARRANTIES.
+# 
+# 
+#
+# This script  automatically generates the two files "opcodes.h" and
+# "opcodes.cpp" from a spec file that provide an enumerated type for
+# assembly opcodes as well as routine to convert between them and their
+# string representations. These files can either be used as stand alone or
+# have their contents embedded into another broader type definition file.
+#
+# It require the following tools to be on the system and in the executable path:
+#		fmt, sed, perl, cut, tr
+
+if [ $# -ne 1 ]; then
+	echo "Usage: $0 <spec_file>"
+	exit
+fi
+
+SPECFILE=$1
+CPPFILE=opcodes.cpp
+HFILE=opcodes.h
+TYPENAME=iType
+TMPFILE=gen.tmp.$$
+
+trap 'rm -f $CPPFILE $HFILE $TMPFILE' 1 2 3
+
+rm -f $CPPFILE $HFILE $TMPFILE
+
+######################################################################
+# Generate the .h file
+######################################################################
+
+# Generate the enumerated type in the header file
+echo >> ${HFILE}
+echo "// ### BEGIN GENERATED CODE ###" >> ${HFILE}
+echo >> ${HFILE}
+echo "// Define an enumerated type for the opcodes" >> ${HFILE}
+echo "enum $TYPENAME {" >> ${HFILE}
+
+# Extract the lines beginning with a lower case letter (i.e. instruction lines)
+grep '^[a-z]' $SPECFILE |
+
+# sort these lines
+sort |
+
+# change every ',' to an underscore
+tr ',' '_' |
+
+# change the case of the first letter and prepend '<TAB>i' and append ','
+perl -p -e 's/^[a-z]/uc($&)/e' | sed 's/^[A-Za-z0-9_]*/	i&,/' >> ${TMPFILE}
+
+# add one more type 'iInvalid' for the invalid opcode type
+echo "	iInvalid" >> ${TMPFILE}
+
+# send the format enumerated type delcaration to the .h file (and clear the tmp file)
+fmt -c ${TMPFILE} >> ${HFILE}
+rm -f ${TMPFILE}
+
+# end the enumerated type declaration
+echo "};" >> ${HFILE}
+echo >> ${HFILE}
+
+# add the decalrations for the conversion functions
+echo "// Convert from ${TYPENAME} to a string representation" >> ${HFILE}
+echo "char const* Type2String($TYPENAME t);" >> ${HFILE}
+echo >> ${HFILE}
+echo "// Convert from a string to the matching ${TYPENAME}" >> ${HFILE}
+echo "${TYPENAME} String2Type(const char* opString);" >> ${HFILE}
+echo >> ${HFILE}
+echo "// ### END GENERATED CODE ###" >> ${HFILE}
+echo >> ${HFILE}
+
+######################################################################
+# Generate the .cpp file
+######################################################################
+
+# This file needs to include <stdlib.h> and <string.h> to use bsearch and strcmp
+echo "#include <stdlib.h>" >> ${CPPFILE}
+echo "#include <string.h>" >> ${CPPFILE}
+
+# Define the array of opcode strings that will have indicies matching the enumerated type
+echo >> ${CPPFILE}
+echo "// ### BEGIN GENERATED CODE ###" >> ${CPPFILE}
+echo >> ${CPPFILE}
+
+# Define the comparison function to be used when comparing two string pointers
+echo "// A comparsion function for pointers to strings" >> ${CPPFILE}
+echo "int comp_fn(const char** first, const char** second) { return strcmp(*first,*second);  }" >> ${CPPFILE}
+echo >> ${CPPFILE}
+
+echo "// The array of opcode strings indexed by their corresponding opcode type" >> ${CPPFILE}
+echo "const char* _opcodeStrings[] = {" >> ${CPPFILE}
+
+for OPC in `grep '^[a-z]' $SPECFILE | sort`; do
+	echo "	\"$OPC\"," >> ${TMPFILE}
+done
+
+echo "	\"invalid\"" >> ${TMPFILE}
+
+fmt -c ${TMPFILE} >> ${CPPFILE}
+echo "};" >> ${CPPFILE}
+echo >> ${CPPFILE}
+
+# Generate the function to convert from opcode to string
+echo "char const* Type2String($TYPENAME t) { return _opcodeStrings[t]; }" >> ${CPPFILE}
+echo >> ${CPPFILE}
+
+# Generate the function to convert from string to opcode
+NUMOPCODES="$(grep '^[a-z]' $SPECFILE | wc | sed 's/ *\|   */ /'| cut -d' ' -f2) + 1"
+echo "$TYPENAME String2Type(const char* opString)" >> ${CPPFILE}
+echo "{" >> ${CPPFILE}
+echo "	const int NumOpcodes = ${NUMOPCODES};" >> ${CPPFILE}
+echo "	char** result = static_cast<char**>(bsearch(&opString,_opcodeStrings,NumOpcodes,sizeof(_opcodeStrings[0]),comp_fn));" >> ${CPPFILE}
+echo "	assert(result);" >> ${CPPFILE}
+echo "	return static_cast<${TYPENAME}>((static_cast<int>(result) - static_cast<int>(_opcodeStrings)) / sizeof(char**));" >> ${CPPFILE}
+echo >> ${CPPFILE}
+
+echo "}" >> ${CPPFILE}
+echo >> ${CPPFILE}
+echo "// ### END GENERATED CODE ###" >> ${CPPFILE}
+echo >> ${CPPFILE}
+
+# Clean up
+rm -f ${TMPFILE}
